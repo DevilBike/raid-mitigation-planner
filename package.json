@@ -1,0 +1,10 @@
+{
+  "name": "raid-mitigation-planner",
+  "productName": "Raid Mitigation Planner",
+  "version": "0.1.0",
+  "private": true,
+  "description": "FFXIV raid mitigation planner for Android and Windows",
+  "scripts": {
+    "start": "node scripts/serve.mjs"
+  }
+}
