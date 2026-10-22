@@ -346,7 +346,7 @@ function renderHeader() {
   const f = F(); if (!f) return;
   $("#fightname").textContent = f.demo ? "Example data" : [f.zone, f.name].filter(Boolean).join(" · ");
   const ban = [];
-  if (f.demo) ban.push(`<div class="banner"><span><b>This is example data.</b> Import an FF Logs fight to build a real plan. Paste a report link in the project thread and Claude adds it here, or drop a file made by the import script.</span><button class="btn" data-act="import">Import fight</button></div>`);
+  if (f.demo) ban.push(`<div class="banner"><span><b>This is example data.</b> Import an FF Logs fight to build a real plan. Tap Import fight and paste an FF Logs link.</span><button class="btn" data-act="import">Import fight</button></div>`);
   else if (!P().party.length) ban.push(`<div class="banner"><span><b>Your party is empty,</b> so no mitigations show. To see one job's mits, keep the full party and tap that job's icon next to "Show".</span><button class="btn" data-act="logparty">Use log party</button></div>`);
   else if (!S.db) ban.push(`<div class="banner"><span>Plans are saved in this browser only, because shared saving is not available in this view.</span></div>`);
   $("#banner").innerHTML = ban.join("");
@@ -934,17 +934,48 @@ let toastT;
 function toast(msg) { document.querySelector(".toast")?.remove(); const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; document.body.appendChild(t); clearTimeout(toastT); toastT = setTimeout(() => t.remove(), 2600); }
 
 function openImport() {
-  const cmd = `python fflogs_timeline.py "https://www.fflogs.com/reports/CODE?fight=last"`;
+  const ff = window.RMP?.fflogs, keys = ff?.getKeys() || {};
   const s = modal(`<h2>Import a fight</h2>
-    <p>The planner turns any FF Logs fight into a timeline of boss casts and damage, and learns which mitigations players used for each hit.</p>
-    <h4>Easiest: ask Claude</h4>
-    <p>Paste an FF Logs report link in the project thread. Claude imports it and it shows up here on its own.</p>
-    <h4>On your own PC</h4>
-    <p>Run the import script from the project files with your FF Logs API keys set as <span class="mono">FFLOGS_CLIENT_ID</span> and <span class="mono">FFLOGS_CLIENT_SECRET</span>:</p>
-    <pre>${esc(cmd)}</pre>
-    <p>Then drop the JSON file it writes here.</p>
+    <p>Paste an FF Logs report link. The planner turns the fight into a timeline of boss casts and damage, and learns which mitigations the fastest groups used for each hit.</p>
+    <form id="linkForm" style="display:flex;gap:8px;margin-top:10px">
+      <input class="btn" id="linkIn" type="url" inputmode="url" autocomplete="off" placeholder="https://www.fflogs.com/reports/…?fight=last" style="flex:1;min-width:0;font-weight:400" aria-label="FF Logs link">
+      <button class="btn primary" id="linkGo" type="submit">Import</button>
+    </form>
+    <p class="muted" id="linkMsg" style="min-height:1.4em;margin-top:6px">No <span class="mono">fight=</span> in the link imports the last kill.</p>
+    <details id="keyBox" style="margin-top:6px" ${ff?.hasKeys() ? "" : "open"}><summary><b>FF Logs API key</b> <span class="muted" id="keyState">${ff?.hasKeys() ? "saved on this device" : "needed once"}</span></summary>
+      <p>FF Logs only answers apps with a key. Making one takes a minute and is free:</p>
+      <ol class="muted" style="margin:4px 0 8px 18px;padding:0;font-size:14px">
+        <li>Open <a href="https://www.fflogs.com/api/clients/" target="_blank" rel="noopener">fflogs.com/api/clients</a> and sign in.</li>
+        <li>Choose <b>Create client</b>. Any name works; use <span class="mono">http://localhost</span> as the redirect URL and leave "Public client" off.</li>
+        <li>Copy the client ID and secret here.</li>
+      </ol>
+      <input class="btn" id="keyId" placeholder="Client ID" autocomplete="off" value="${esc(keys.id || "")}" style="width:100%;font-weight:400;margin-bottom:6px">
+      <input class="btn" id="keySecret" type="password" placeholder="Client secret" autocomplete="off" value="${esc(keys.secret || "")}" style="width:100%;font-weight:400">
+      <div style="display:flex;gap:8px;margin-top:8px"><button class="btn" data-keysave>Save key</button>${ff?.hasKeys() ? `<button class="btn" data-keyclear>Remove</button>` : ""}</div>
+    </details>
+    <h4>Or import a file</h4>
     <label class="drop-zone" id="dz"><input type="file" id="fileIn" accept=".json,application/json" hidden>Drop a fight file here, or <u>choose one</u></label>
-    <div style="display:flex;justify-content:flex-end;margin-top:14px"><button class="btn" data-close>Close</button></div>`);
+    <div style="display:flex;justify-content:flex-end;margin-top:14px"><button class="btn" data-close>Close</button></div>`,
+    (e, s) => {
+      if (e.target.closest("[data-keysave]")) {
+        const id = s.querySelector("#keyId").value.trim(), secret = s.querySelector("#keySecret").value.trim();
+        if (!id || !secret) { toast("Enter both the client ID and the secret."); return; }
+        ff.setKeys({ id, secret }); s.querySelector("#linkMsg").textContent = ""; s.querySelector("#keyState").textContent = "saved on this device"; s.querySelector("#keyBox").open = false; toast("API key saved");
+      }
+      if (e.target.closest("[data-keyclear]")) { ff.setKeys(null); s.querySelector("#keyId").value = s.querySelector("#keySecret").value = ""; s.querySelector("#keyState").textContent = "needed once"; toast("API key removed"); }
+    });
+  const msg = s.querySelector("#linkMsg"), go = s.querySelector("#linkGo");
+  s.querySelector("#linkForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    if (!ff) { msg.textContent = "FF Logs import isn't available here."; return; }
+    const link = s.querySelector("#linkIn").value;
+    try { ff.parseLink(link); } catch (err) { msg.textContent = err.message; return; }
+    if (!ff.hasKeys()) { msg.textContent = "Add your FF Logs API key below first."; s.querySelector("#keyBox").open = true; return; }
+    go.disabled = true;
+    try { const f = await ff.importLink(link, { onProgress: t => msg.textContent = t }); await importFight(f); s.remove(); }
+    catch (err) { msg.textContent = err.message || String(err); if (err.code === "badkey") s.querySelector("#keyBox").open = true; }
+    finally { go.disabled = false; }
+  });
   const dz = s.querySelector("#dz");
   const take = async file => { try { await importFight(JSON.parse(await file.text())); s.remove(); } catch (e) { toast(e.message || "That file isn't a fight file from the import script."); } };
   s.querySelector("#fileIn").addEventListener("change", e => e.target.files[0] && take(e.target.files[0]));
@@ -1018,11 +1049,19 @@ function openFill() {
         if (!comp.length) { msg.textContent = "Pick at least one job."; return; }
         const have = pats.find(p => compSlug(p.comp) === compSlug(comp));
         if (have) { s.querySelector("#src").value = have.id; msg.textContent = "Already fetched. It's selected under Learn from."; return; }
-        const id = safeId(f.id + "~" + compSlug(comp));
-        const req = { id, fight: f.id, name: f.name, comp: [...comp], at: Date.now(), status: "pending" };
-        if (S.db) { try { await S.db.doc("requests/" + id).set(req); } catch (err) { msg.textContent = "Couldn't save the request: " + (err.message || err.code); return; } }
-        S.requests[id] = req; s.querySelector("#pend").innerHTML = drawPend();
-        msg.innerHTML = `Saved. The page can't reach FF Logs itself, so ask Claude in the project ("fetch my comp requests"). The logs show up under <b>Learn from</b> when they're in.`;
+        const id = safeId(f.id + "~" + compSlug(comp)), btn = e.target.closest("[data-req]");
+        if (!window.RMP?.fflogs?.hasKeys()) { msg.textContent = "Add your FF Logs API key first: Import fight, then FF Logs API key."; return; }
+        btn.disabled = true;
+        try {
+          const pat = { id, ...(await window.RMP.fflogs.compPatterns(f, comp, { onProgress: t => msg.textContent = t })) };
+          if (S.db) await S.db.doc("patterns/" + id).set(pat);
+          S.patterns[id] = pat; pats.push(pat);
+          const sel = s.querySelector("#src");
+          sel.insertAdjacentHTML("beforeend", `<option value="${esc(id)}">Logs with ${esc(pat.comp.join(" "))} (${pat.sampleSize})</option>`);
+          sel.value = id; s.querySelector("[data-fill]").disabled = false;
+          msg.textContent = `Found ${pat.sampleSize} log${pat.sampleSize > 1 ? "s" : ""}. They're selected under Learn from.`;
+        } catch (err) { msg.textContent = err.message || String(err); }
+        finally { btn.disabled = false; }
       }
     });
   s.addEventListener("input", e => { if (e.target.id === "thr") s.querySelector("#thrv").textContent = pct(Number(e.target.value)); });
